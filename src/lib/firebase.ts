@@ -26,7 +26,13 @@ import {
 } from 'firebase/firestore';
 import { UserProfile, UserRole, UserStatus, GeneratedWebsite, SystemSettings } from '../types';
 
+export const ADMIN_EMAILS = ['nocteos67@gmail.com', 'nocteos60@gmail.com'];
 export const ADMIN_EMAIL = 'nocteos67@gmail.com';
+
+export function isAdminEmail(email: string): boolean {
+  if (!email) return false;
+  return ADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
 
 // Official Firebase configuration provided by user
 export const firebaseConfig = {
@@ -108,22 +114,31 @@ testConnection();
 function getLocalUsers(): UserProfile[] {
   try {
     const raw = localStorage.getItem(LOCAL_USERS_KEY);
-    if (!raw) {
-      // Seed default admin user
-      const defaultAdmin: UserProfile = {
-        uid: 'admin_nocteos67_uid',
-        email: ADMIN_EMAIL,
-        displayName: 'Super Admin (Nocteos)',
-        role: 'admin',
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        credits: 999999,
-        lastLogin: new Date().toISOString()
-      };
-      localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify([defaultAdmin]));
-      return [defaultAdmin];
-    }
-    return JSON.parse(raw);
+    const list: UserProfile[] = raw ? JSON.parse(raw) : [];
+
+    // Ensure all super admin accounts exist with admin role
+    ADMIN_EMAILS.forEach((admEmail, idx) => {
+      const found = list.find(u => u.email.toLowerCase() === admEmail.toLowerCase());
+      if (!found) {
+        list.push({
+          uid: `admin_${idx}_${admEmail.replace(/[^a-z0-9]/g, '_')}`,
+          email: admEmail,
+          displayName: `Super Admin (${admEmail.split('@')[0]})`,
+          role: 'admin',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          credits: 999999,
+          lastLogin: new Date().toISOString()
+        });
+      } else {
+        found.role = 'admin';
+        found.status = 'active';
+        found.credits = 999999;
+      }
+    });
+
+    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(list));
+    return list;
   } catch {
     return [];
   }
@@ -191,12 +206,37 @@ export async function verifyUserIsRegisteredByAdmin(email: string): Promise<bool
 // Complete Authentication & Login flow with instant fallback
 export async function loginUserWithCredentials(email: string, password: string): Promise<UserProfile> {
   const normEmail = email.trim().toLowerCase();
-  const isSuperAdmin = normEmail === ADMIN_EMAIL.toLowerCase();
+  const isSuperAdmin = isAdminEmail(normEmail);
 
   // 1. Verify user is Admin or Admin-created
   const isAllowed = await verifyUserIsRegisteredByAdmin(normEmail);
-  if (!isAllowed) {
-    throw new Error('Akun Anda belum dibuat oleh Admin. Silakan hubungi Admin untuk dibuatkan akun.');
+  if (!isAllowed && !isSuperAdmin) {
+    throw new Error('Akun Anda belum dibuat oleh Admin. Silakan hubungi Admin untuk dibuatkan akun dan password akses.');
+  }
+
+  // Check existing user in local storage or Firestore
+  const localUsers = getLocalUsers();
+  let existing = localUsers.find(u => u.email.toLowerCase() === normEmail);
+
+  if (!existing) {
+    try {
+      const q = query(collection(db, 'users'), where('email', '==', normEmail));
+      const snap = await withTimeout(getDocs(q), 1500, null as any);
+      if (snap && !snap.empty) {
+        existing = snap.docs[0].data() as UserProfile;
+      }
+    } catch {}
+  }
+
+  // Validate password if stored
+  if (existing && existing.password) {
+    if (existing.password !== password) {
+      throw new Error('Password salah. Silakan periksa kembali password Anda atau hubungi Admin untuk reset password.');
+    }
+  }
+
+  if (existing && existing.status === 'suspended') {
+    throw new Error('Akun Anda sedang ditangguhkan/dinonaktifkan oleh Admin. Silakan hubungi Admin.');
   }
 
   // 2. Try Firebase Auth with 2-second timeout
@@ -230,34 +270,41 @@ export async function loginUserWithCredentials(email: string, password: string):
   }
 
   if (!profile) {
-    // Check local storage for existing user or create
-    const localUsers = getLocalUsers();
-    const existing = localUsers.find(u => u.email.toLowerCase() === normEmail);
     if (existing) {
-      profile = { ...existing, lastLogin: new Date().toISOString() };
+      profile = { 
+        ...existing, 
+        password: existing.password || password,
+        lastLogin: new Date().toISOString() 
+      };
     } else {
       profile = {
         uid: fbUser ? fbUser.uid : (isSuperAdmin ? 'admin_nocteos67_uid' : 'usr_' + Date.now()),
         email: normEmail,
+        password,
         displayName: isSuperAdmin ? 'Super Admin (Nocteos)' : normEmail.split('@')[0],
         role: isSuperAdmin ? 'admin' : 'member',
         status: 'active',
         createdAt: new Date().toISOString(),
-        credits: isSuperAdmin ? 999999 : 25,
+        credits: isSuperAdmin ? 999999 : 50,
         lastLogin: new Date().toISOString()
       };
     }
+  } else {
+    profile = {
+      ...profile,
+      password: existing?.password || profile.password || password
+    };
   }
 
   // Save session & local storage
-  const localUsers = getLocalUsers();
-  const idx = localUsers.findIndex(u => u.email.toLowerCase() === normEmail);
+  const currentLocal = getLocalUsers();
+  const idx = currentLocal.findIndex(u => u.email.toLowerCase() === normEmail);
   if (idx >= 0) {
-    localUsers[idx] = profile;
+    currentLocal[idx] = profile;
   } else {
-    localUsers.push(profile);
+    currentLocal.push(profile);
   }
-  saveLocalUsers(localUsers);
+  saveLocalUsers(currentLocal);
   setActiveSession(profile);
 
   return profile;
@@ -266,7 +313,7 @@ export async function loginUserWithCredentials(email: string, password: string):
 // Sync or fetch user profile from Firestore / Local Storage
 export async function syncUserProfile(user: User): Promise<UserProfile | null> {
   const userEmail = user.email || '';
-  const isSuperAdmin = userEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const isSuperAdmin = isAdminEmail(userEmail);
 
   // Check if account was created by admin
   const isRegistered = await verifyUserIsRegisteredByAdmin(userEmail);
@@ -303,7 +350,7 @@ export async function syncUserProfile(user: User): Promise<UserProfile | null> {
     profile = {
       uid: user.uid,
       email: userEmail,
-      displayName: user.displayName || userEmail.split('@')[0] || 'Member User',
+      displayName: user.displayName || userEmail.split('@')[0] || (isSuperAdmin ? 'Super Admin' : 'Member User'),
       photoURL: user.photoURL || undefined,
       role,
       status,
@@ -312,7 +359,7 @@ export async function syncUserProfile(user: User): Promise<UserProfile | null> {
       lastLogin: new Date().toISOString()
     };
   } else {
-    // Ensure admin role if email matches nocteos67@gmail.com
+    // Ensure admin role if email matches admin email
     if (isSuperAdmin && (profile.role !== 'admin' || profile.status !== 'active')) {
       profile.role = 'admin';
       profile.status = 'active';
@@ -343,12 +390,24 @@ export async function syncUserProfile(user: User): Promise<UserProfile | null> {
 // Get all registered users (for Admin GUI)
 export async function getAllUsers(): Promise<UserProfile[]> {
   try {
-    const colRef = collection(db, 'users');
-    const snap = await getDocs(colRef);
-    if (!snap.empty) {
-      const users = snap.docs.map(doc => doc.data() as UserProfile);
-      saveLocalUsers(users);
-      return users;
+    const fetchFirestore = async () => {
+      const colRef = collection(db, 'users');
+      const snap = await getDocs(colRef);
+      if (!snap.empty) {
+        return snap.docs.map(doc => doc.data() as UserProfile);
+      }
+      return null;
+    };
+    const snapUsers = await withTimeout(fetchFirestore(), 1200, null);
+    if (snapUsers && snapUsers.length > 0) {
+      // Merge with local users
+      const current = getLocalUsers();
+      snapUsers.forEach(u => {
+        const exist = current.find(c => c.uid === u.uid || c.email.toLowerCase() === u.email.toLowerCase());
+        if (!exist) current.push(u);
+      });
+      saveLocalUsers(current);
+      return current;
     }
   } catch (err) {
     console.warn('Failed to fetch users from Firestore, using local storage:', err);
@@ -362,58 +421,102 @@ export async function updateUserStatus(uid: string, status: UserStatus, role?: U
   if (role) updates.role = role;
   if (credits !== undefined) updates.credits = credits;
 
-  try {
-    const userRef = doc(db, 'users', uid);
-    await updateDoc(userRef, updates);
-  } catch (e) {
-    console.warn('Failed to update user in Firestore:', e);
-  }
-
+  // 1. Instant local storage update
   const localUsers = getLocalUsers();
   const idx = localUsers.findIndex(u => u.uid === uid);
   if (idx >= 0) {
     localUsers[idx] = { ...localUsers[idx], ...updates };
     saveLocalUsers(localUsers);
   }
+
+  // 2. Non-blocking Firestore update
+  try {
+    const userRef = doc(db, 'users', uid);
+    withTimeout(updateDoc(userRef, updates), 1500, null).catch(() => {});
+  } catch (e) {
+    console.warn('Failed to update user in Firestore:', e);
+  }
 }
 
-// Create new user directly from Admin Panel
-export async function createMemberByAdmin(email: string, displayName: string, role: UserRole, status: UserStatus, credits: number): Promise<UserProfile> {
+// Update user password directly from Admin Panel
+export async function updateUserPasswordByAdmin(uid: string, newPassword: string): Promise<void> {
+  const updates: Partial<UserProfile> = { password: newPassword };
+
+  // 1. Instant local storage update
+  const localUsers = getLocalUsers();
+  const idx = localUsers.findIndex(u => u.uid === uid);
+  if (idx >= 0) {
+    localUsers[idx] = { ...localUsers[idx], password: newPassword };
+    saveLocalUsers(localUsers);
+  }
+
+  // 2. Non-blocking Firestore update
+  try {
+    const userRef = doc(db, 'users', uid);
+    withTimeout(updateDoc(userRef, updates), 1500, null).catch(() => {});
+  } catch (e) {
+    console.warn('Failed to update user password in Firestore:', e);
+  }
+}
+
+// Create new user directly from Admin Panel with Password
+export async function createMemberByAdmin(
+  email: string, 
+  password: string, 
+  displayName: string, 
+  role: UserRole = 'member', 
+  status: UserStatus = 'active', 
+  credits: number = 50
+): Promise<UserProfile> {
+  const normEmail = email.trim().toLowerCase();
   const fakeUid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const newUser: UserProfile = {
     uid: fakeUid,
-    email,
-    displayName: displayName || email.split('@')[0],
+    email: normEmail,
+    password: password.trim(),
+    displayName: displayName || normEmail.split('@')[0],
     role,
     status,
     createdAt: new Date().toISOString(),
-    credits: credits || 25,
+    credits: credits || 50,
     lastLogin: new Date().toISOString()
   };
 
-  try {
-    const userRef = doc(db, 'users', fakeUid);
-    await setDoc(userRef, newUser);
-  } catch (e) {
-    console.warn('Firestore create user error:', e);
-  }
-
+  // 1. Save to Local Storage immediately for instant response
   const local = getLocalUsers();
-  local.push(newUser);
+  const existIdx = local.findIndex(u => u.email.toLowerCase() === normEmail);
+  if (existIdx >= 0) {
+    local[existIdx] = { ...local[existIdx], ...newUser, uid: local[existIdx].uid };
+    newUser.uid = local[existIdx].uid;
+  } else {
+    local.push(newUser);
+  }
   saveLocalUsers(local);
+
+  // 2. Background sync to Firestore with timeout
+  try {
+    const userRef = doc(db, 'users', newUser.uid);
+    withTimeout(setDoc(userRef, newUser, { merge: true }), 1500, null).catch(() => {});
+  } catch (e) {
+    console.warn('Firestore create user background sync error:', e);
+  }
 
   return newUser;
 }
 
 // Delete user (Admin Panel)
 export async function deleteUserByAdmin(uid: string): Promise<void> {
+  // 1. Instant local removal
+  const local = getLocalUsers().filter(u => u.uid !== uid);
+  saveLocalUsers(local);
+
+  // 2. Background Firestore deletion
   try {
-    await deleteDoc(doc(db, 'users', uid));
+    const userRef = doc(db, 'users', uid);
+    withTimeout(deleteDoc(userRef), 1500, null).catch(() => {});
   } catch (e) {
     console.warn('Firestore delete user failed:', e);
   }
-  const local = getLocalUsers().filter(u => u.uid !== uid);
-  saveLocalUsers(local);
 }
 
 // Save Website Project

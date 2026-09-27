@@ -5,6 +5,7 @@ export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  password?: string;
   photoURL?: string;
   role: UserRole;
   status: UserStatus;

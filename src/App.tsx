@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, GeneratedWebsite } from './types';
-import { auth, onAuthStateChanged, syncUserProfile, signOut, getUserWebsites, getActiveSession, setActiveSession } from './lib/firebase';
+import { auth, onAuthStateChanged, syncUserProfile, signOut, getUserWebsites, getActiveSession, setActiveSession, isAdminEmail } from './lib/firebase';
 import { AuthModal } from './components/AuthModal';
 import { PendingApprovalView } from './components/PendingApprovalView';
 import { WizardMaster } from './components/Wizard/WizardMaster';
@@ -30,10 +30,15 @@ export default function App() {
       if (firebaseUser) {
         const profile = await syncUserProfile(firebaseUser);
         if (profile) {
-          setUserProfile(profile);
-          setActiveSession(profile);
+          const effectiveProfile: UserProfile = {
+            ...profile,
+            role: isAdminEmail(profile.email) ? 'admin' : profile.role,
+            status: isAdminEmail(profile.email) ? 'active' : profile.status,
+          };
+          setUserProfile(effectiveProfile);
+          setActiveSession(effectiveProfile);
           setShowAuthModal(false);
-          loadUserWebsites(profile.email);
+          loadUserWebsites(effectiveProfile.email);
         }
       }
     });
@@ -75,21 +80,34 @@ export default function App() {
           onClose={() => {}}
           initialError={authError}
           onSuccess={(profile) => {
-            setUserProfile(profile);
+            const effectiveProfile: UserProfile = {
+              ...profile,
+              role: isAdminEmail(profile.email) ? 'admin' : profile.role,
+              status: isAdminEmail(profile.email) ? 'active' : profile.status,
+            };
+            setUserProfile(effectiveProfile);
+            setActiveSession(effectiveProfile);
             setShowAuthModal(false);
             setAuthError(null);
-            loadUserWebsites(profile.email);
+            loadUserWebsites(effectiveProfile.email);
           }}
         />
       </div>
     );
   }
 
+  const isCurrentUserAdmin = userProfile.role === 'admin' || isAdminEmail(userProfile.email);
+  const effectiveProfile: UserProfile = {
+    ...userProfile,
+    role: isCurrentUserAdmin ? 'admin' : userProfile.role,
+    status: isCurrentUserAdmin ? 'active' : userProfile.status,
+  };
+
   // Account pending approval view
-  if (userProfile.status === 'pending' && userProfile.role !== 'admin') {
+  if (effectiveProfile.status === 'pending' && !isCurrentUserAdmin) {
     return (
       <PendingApprovalView
-        user={userProfile}
+        user={effectiveProfile}
         onRefresh={(updated) => setUserProfile(updated)}
         onLogout={handleLogout}
       />
@@ -99,24 +117,24 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0B0F19]">
       <WizardMaster
-        user={userProfile}
+        user={effectiveProfile}
         onOpenAdmin={() => setShowAdminModal(true)}
         onOpenProjects={() => {
-          loadUserWebsites(userProfile.email);
+          loadUserWebsites(effectiveProfile.email);
           setShowProjectsModal(true);
         }}
         onLogout={handleLogout}
         loadedWebsite={selectedWebsite}
         websites={websites}
-        onRefreshWebsites={() => loadUserWebsites(userProfile.email)}
+        onRefreshWebsites={() => loadUserWebsites(effectiveProfile.email)}
       />
 
       {/* Admin Dashboard Modal */}
-      {userProfile.role === 'admin' && (
+      {isCurrentUserAdmin && (
         <AdminDashboardModal
           isOpen={showAdminModal}
           onClose={() => setShowAdminModal(false)}
-          currentUserProfile={userProfile}
+          currentUserProfile={effectiveProfile}
           websites={websites}
         />
       )}
@@ -130,7 +148,7 @@ export default function App() {
           setSelectedWebsite(site);
           setShowProjectsModal(false);
         }}
-        onRefresh={() => loadUserWebsites(userProfile.email)}
+        onRefresh={() => loadUserWebsites(effectiveProfile.email)}
       />
     </div>
   );

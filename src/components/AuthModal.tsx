@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { loginUserWithCredentials } from '../lib/firebase';
 import { UserProfile } from '../types';
-import { Sparkles, Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
+import { Sparkles, Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -13,6 +13,7 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onSuccess, initialError }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError || null);
 
@@ -57,7 +58,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onSuccess, initial
             Member Login
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Masuk untuk mengakses AI Website Generator
+            Masuk dengan akun & password yang diberikan Admin
           </p>
         </div>
 
@@ -86,17 +87,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onSuccess, initial
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">Password</label>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Password Akun</label>
             <div className="relative">
               <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full bg-[#1e293b] border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-white rounded-xl py-2.5 pl-10 pr-4 text-sm placeholder:text-slate-500 outline-none transition"
+                className="w-full bg-[#1e293b] border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-white rounded-xl py-2.5 pl-10 pr-10 text-sm placeholder:text-slate-500 outline-none transition"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-3 text-slate-400 hover:text-white"
+                title={showPassword ? "Sembunyikan" : "Tampilkan"}
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
 
@@ -117,7 +126,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onSuccess, initial
         </form>
 
         <div className="mt-8 pt-4 border-t border-slate-800/80 text-center text-[11px] text-slate-500">
-          Sistem keanggotaan tertutup. Pembuatan akun dilakukan oleh Administrator.
+          Akun dibuat secara khusus oleh Administrator vimos.ai.
         </div>
       </div>
     </div>
